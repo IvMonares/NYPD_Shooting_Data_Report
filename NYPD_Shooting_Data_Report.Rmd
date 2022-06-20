@@ -1,0 +1,301 @@
+---
+title: "NYPD Shooting Data Report"
+author: "Iván Monares Vélez"
+date: '2022-06-18'
+output: html_document
+---
+
+```{r setup, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(fmsb)
+library(gridExtra)
+```
+
+## NYPD Shooting Incident Data (Historic)
+
+This is an analysis of shooting incidents that occurred in NYC going back to 2006 through the end of the previous calendar year, extracted and reviewed by the Office of Management Analysis and Planning. Data was pulled from https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD on June 18, 2022.
+
+Population distributions for each NYC borough were obtained from data published from CensusScope on the 2000 and 2010 years. 
+
+```{r import_data, message=FALSE}
+# Set working directory to Source File Location (Session -> Set Working Directory -> To Source File Location).
+# Ensure the working directory contains both the "NYPD_Shooting_Incident_Data__Historic_.csv" 
+# and the "NYC_Populations.csv" files used in this study.
+
+populations <- read_csv("NYC_Populations.csv", show_col_types = FALSE)
+dataset <- read_csv("NYPD_Shooting_Incident_Data__Historic_.csv", show_col_types = FALSE)
+dataset <- dataset %>% select(OCCUR_DATE:VIC_RACE) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  rename(Murder = STATISTICAL_MURDER_FLAG)
+
+
+```
+
+### Visualization 1
+
+```{r data_preparation_1}
+
+murder_count_ny <- dataset %>%
+  group_by(Year = strtoi(format(OCCUR_DATE, format="%Y"))) %>%
+  select(Year, Murder) %>%
+  count(Murder) %>%
+  mutate(perc = round(n / sum(n), 2))
+
+```
+```{r visualization_1, out.width="100%"}
+
+shootings_per_year_graph = ggplot(murder_count_ny, aes(x = Year, y = n, fill = Murder, order=Murder)) +
+  geom_area(position = position_stack(reverse = TRUE)) +
+  theme(legend.position='bottom') + 
+  ggtitle("Shootings per Year") +
+  xlab("Year") + 
+  ylab("number of shootings")
+
+
+murders_per_shootings_graph = ggplot(murder_count_ny, aes(fill=Murder, y=perc, x=Year)) + 
+  geom_bar(position=position_fill(reverse = TRUE), stat="identity") +
+  ggtitle("Proportion of Murders per Year") +
+  theme(legend.position='bottom') + 
+  xlab("Year") + 
+  ylab("Proportion")
+
+shootings_per_year_graph
+murders_per_shootings_graph
+
+```
+
+### Model 1
+
+```{r data_preparation_model}
+
+model_set <- dataset %>%
+  mutate(Hour = parse_integer(format(strptime(OCCUR_TIME,"%H:%M:%S"),'%H')),
+         Minute = parse_integer(format(strptime(OCCUR_TIME,"%H:%M:%S"),'%M')),
+         Time = Hour +(Minute/60)) %>%
+  select(Hour, Minute, Time) %>%
+  count(Hour)
+
+model_set$Hour2 <- model_set$Hour^2
+model_set$Hour3 <- model_set$Hour^3
+
+model <- lm(n ~ Hour + Hour2 + Hour3, data = model_set)
+shootings_with_predictions <- model_set %>%
+  mutate(pred = predict(model))
+
+```
+```{r model_1, out.width="100%"}
+
+model_graph = ggplot(shootings_with_predictions) + 
+  geom_point(aes(x = Hour, y = n), color="blue") + 
+  geom_point(aes(x = Hour, y = pred), color="red")
+
+model_graph
+
+```
+
+### Analisys 1
+
+In this graph we can see that the yearly number of shootings from 2006 to 2011 was between 1800 and 2000. This number started dropping in 2012 to the point that shootings had been halved by 2017 and reached its lowest point in 2018. However, in 2020 and 2021 they rose again to their previous levels, reversing all progress gained in the previous eight years. Based on the distribution shown in the second graph, the rate of incidents which resulted in the victim's death has remained consistent, with approximately 20% of all shooting incidents being classified as murder.
+
+On a lower scale timeline, half of all shootings occur between 8 p.m. and 3 a.m., with the safety times throughout the day being from 7 to 11 a.m. The occurrence of per hour of the day can be estimated with the formula 
+$n = 2383.2969 -473.0433*Hour + 31.5208*Hour^{2} -0.4902*Hour^{3}$
+
+
+
+### Visualization 2
+```{r data_preparation_2}
+
+dataset_by_boro <- dataset %>%
+      group_by(BORO, YEAR = strtoi(format(OCCUR_DATE, format="%Y"))) %>%
+      arrange(BORO, YEAR)%>%
+      select(BORO, YEAR) %>%
+      count(YEAR)
+
+populations_by_year <- populations %>%
+  select(BORO, YEAR, TOTAL) %>%
+  arrange(BORO, YEAR)
+
+```
+
+```{r visualization_2, out.width="100%"}
+
+shootings_per_boro_graph = ggplot(dataset_by_boro, aes(x = YEAR, y = n, fill = BORO)) +
+  geom_area(position=position_fill(reverse = TRUE), stat="identity") +
+  theme(legend.position='none') +
+  ggtitle("Shootings Distribution") +
+  xlab("Year") + 
+  ylab("Proportion")
+
+
+population_per_boro_graph = ggplot(populations_by_year, aes(x = YEAR, y = TOTAL, fill = BORO)) +
+  geom_area(position=position_fill(reverse = TRUE), stat="identity") +
+  ggtitle("Population Distribution") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  xlab("") +
+  ylab("Proportion\n(Interpolated from 2000 and 2010 data)")
+
+grid.arrange(shootings_per_boro_graph, population_per_boro_graph,
+  layout_matrix = rbind(c(1, 1, 2, 2))
+)
+
+```
+
+### Analisys 2
+
+From this graphs we can conclude that the distribution of shooting incidents across the different NY Boroughs has remained approximately the same throughout the years. However, when comparing against the population distribution throughout the boroughs, it is evident that the Bronx and Brooklyn boroughs have a higher shooting rate, as they represent 50% of the population but account for 70% of the shootings.  
+
+### Visualization 3
+
+```{r data_preparation_3}
+
+total_victims_per_race <- dataset %>% 
+  select(VIC_RACE) %>% 
+  filter(VIC_RACE != "NA") %>%
+  filter(VIC_RACE != "UNKNOWN") %>%
+  count(VIC_RACE) %>%
+  mutate(perc = round(100 * n / sum(n), 2))
+
+victim_perp_race_relation <- dataset %>%
+  filter(PERP_RACE != "NA") %>%
+  filter(PERP_RACE != "UNKNOWN") %>%
+  group_by(VIC_RACE) %>%
+  select(PERP_RACE, VIC_RACE) %>% 
+  count(PERP_RACE)
+
+```
+```{r visualization_3, out.width="100%"}
+
+victims_per_race_graph = ggplot(total_victims_per_race, aes(fill=VIC_RACE, y=perc, x=reorder(VIC_RACE, -perc))) + 
+  geom_bar(stat="identity") +
+  geom_text(aes(label=perc), vjust=-0.3, size=3.5)+
+  scale_x_discrete(guide = guide_axis(n.dodge=2)) +
+  theme(legend.position="bottom") +
+  ggtitle("Race of NY Shooting victims (2006-2021)") +
+  xlab("Victim Race") + 
+  ylab("Percentage of victims")
+
+
+victim_perp_race_relation_graph = ggplot(victim_perp_race_relation, aes(fill=PERP_RACE, y=n, x=reorder(VIC_RACE, -n))) + 
+  geom_bar(position=position_fill(reverse = TRUE), stat="identity") +
+  scale_x_discrete(guide = guide_axis(n.dodge=3)) +
+  theme(legend.position="bottom") +
+  ggtitle("Relation of Shooter-Victim Race (Grouped by Victim)") +
+  xlab("Victim Race") + 
+  ylab("Proportion")
+
+victims_per_race_graph
+victim_perp_race_relation_graph
+```
+
+### Analisys 3
+
+Based on the stacked area chart, it is evident that Black victims are the most predominant in all shootings (~70%), followed by White Hispanic people (~15%) and Black Hispanic people (~12%). This closely mirrors the distribution of the perpetrators' race.
+
+When analysing the relation between the victim's and the perpetrator's race, we can appreciate that shootings between white people are on par with shootings from Black to White people. Similarly with White Hispanics, and in a ratio of 1:2 with Black Hispanics.
+
+However, it appears that American Native, Black and Asian victims are mostly targeted by Black shooters, particularly in with the first two groups. 
+
+### Visualization 4
+
+```{r data_preparation_4}
+
+
+populations_by_borough <- populations %>% 
+  select(-c("TOTAL"), -starts_with("%")) %>% 
+  filter(YEAR == "2010") %>%
+  pivot_longer(-c("YEAR", "BORO"), names_to = "Race",values_to = "Count") 
+
+```
+```{r visualization_4, out.width="100%"}
+
+bronx_population_graph = ggplot(populations_by_borough %>% filter(BORO == "BRONX"), 
+                                aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  theme(legend.position="none") +
+  ggtitle("Bronx") +
+  xlab("") + 
+  ylab("Population")
+
+brooklyn_population_graph = ggplot(populations_by_borough %>% filter(BORO == "BROOKLYN"), 
+                                aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  ggtitle("Brooklyn") +
+  xlab("") + 
+  ylab("Population")
+
+queens_population_graph = ggplot(populations_by_borough %>% filter(BORO == "QUEENS"),
+                                aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  theme(legend.position="none") +
+  ggtitle("Queens") +
+  xlab("") + 
+  ylab("Population")
+
+manhattan_population_graph = ggplot(populations_by_borough %>% filter(BORO == "MANHATTAN"), 
+                                aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  theme(legend.position="none") +
+  ggtitle("Manhattan") +
+  xlab("") + 
+  ylab("Population")
+
+staten_island_population_graph = ggplot(populations_by_borough %>% filter(BORO == "STATEN ISLAND"), 
+                                aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat="identity") +
+  scale_x_discrete(guide = guide_axis(n.dodge=2)) +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  theme(legend.position="none") +
+  geom_bar(position=position_fill(reverse = TRUE), stat="identity") +
+  ggtitle("Staten Island") +
+  xlab("") + 
+  ylab("Population")
+
+grid.arrange( bronx_population_graph, 
+              brooklyn_population_graph, 
+              queens_population_graph, 
+              manhattan_population_graph, 
+              staten_island_population_graph,
+              
+              layout_matrix = rbind(c(1, 2, 2), c(3, 4, 5))
+)
+
+```
+
+### Analisys 4
+
+This graph shows some relation between the conclusions obtained from the second and third set of graphs. Knowing that Black people are both the number one victims and the number one perpetrators of shootings, it is explained why the Bronx and Brooklyn boroughs had a higher amount of shootings given their population, as it is in those two boroughs where Black people represent a greater portion of the population in comparison to Queens, Manhattan and Staten Island. 
+
+However, ot should also be noted that while black people represent les than a quarter of the New York City population, they are responsible for three-quarters of the shootings.
+
+### Conclusion
+
+Based on the data given by the Office of Management Analysis and Planning, complemented with information from CensusScope, it can be concluded that shootings in New York City mostly occur between members of the Black community, with a greater incidence in the Bronx and Brooklyn boroughs.
+
+Further studies should be performed to analyse the sudden increase of shootings in the past two years, and investigate its possible correlation to social changes brought by Covid-19 measures.
+
+### Bias and its Mitigation
+
+A possible source of bias when analysing the data provided by the Office of Management Analysis and Planning could have been an unbalanced distribution of racial groups through the different Boroughs, which could have skewed the analysis results when studying a particular Borough. Based on the Wikipedia "Demographic history of New York City" page (https://en.wikipedia.org/wiki/Demographic_history_of_New_York_City), which pulled data from CensusScope (https://www.censusscope.org) I obtained population distribution data for each Borough.
+
+I took the 2000 and 2010 years' information from each borough into an Excel spreadsheet and removed the "Population" and "% of _" columns. I then interpolated the population changes from 2000 to 2022 and merged it all in a single table. I then renamed the columns to coincide with the records of data.cityofnewyork.us data set using the following rules:
+
+* Non-Hispanic Whites -> WHITE 
+* Black -> BLACK
+* Asian -> ASIAN / PACIFIC ISLANDER
+* Other or Mixed -> AMERICAN INDIAN/ALASKAN NATIVE
+* (White) minus (Non-Hispanic Whites) -> WHITE HISPANIC
+* (Hispanic/Latino) minus (WHITE HISPANIC) -> BLACK HISPANIC
+
+Then, I deleted the columns without a corresponding value in the data.cityofnewyork.us data set, created a TOTAL column for the sum of the populations and added percentage columns for each race group, Finally, I exported the final table as the "NYC_Populations.csv" file imported at the beginning of this analysis. 
+
+### Session Information
+
+```{r sessioninfo}
+sessionInfo()
+```
